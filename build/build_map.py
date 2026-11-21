@@ -95,16 +95,24 @@ json.dump(ctx_names, open(MAP + "/contexts.json", "w"))
 json.dump({"files": sorted(f for f, ok in status.items() if not ok), "tests": sorted(degraded_failed)},
           open(MAP + "/incomplete.json", "w"))
 fx = {}
+ux = {}
 for i in range(len(groups)):
     p = f"{TMP}/trace{i}.json"
     if os.path.exists(p):
-        for k, v in json.load(open(p)).get("opens", {}).items():
-            if not k.startswith("tests/fixtures/"):
+        tr = json.load(open(p))
+        for k, v in tr.get("opens", {}).items():
+            if not k.startswith(("tests/fixtures/", "sqlglot/")):
                 continue
             e = fx.setdefault(k, {"tests": set(), "files": set()})
             e["tests"].update(v["tests"])
             e["files"].update(v["files"])
+        for k, v in tr.get("uses", {}).items():
+            e = ux.setdefault(k, {"tests": set(), "files": set()})
+            e["tests"].update(v["tests"])
+            e["files"].update(v["files"])
 json.dump({k: {"tests": sorted(v["tests"]), "files": sorted(v["files"])} for k, v in fx.items()},
           open(MAP + "/fixtures.json", "w"))
+json.dump({k: {"tests": sorted(v["tests"]), "files": sorted(v["files"])} for k, v in ux.items()},
+          open(MAP + "/uses.json", "w"))
 open(MAP + "/OK", "w").write("ok")
 print(f"map: {len(perfile)} files, {len(ctx_names)} contexts, {len(fx)} fixture files", file=sys.stderr)

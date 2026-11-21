@@ -71,7 +71,7 @@ def is_code(s):
     return bool(s) and not s.startswith("#")
 
 
-def anchors_and_new(old_src, hunks):
+def anchors_and_new(old_src, hunks, all_code=False):
     """Old-file line numbers touched by code changes, plus the patched source."""
     old_lines = old_src.split("\n")
     out, anchors = [], set()
@@ -87,13 +87,13 @@ def anchors_and_new(old_src, hunks):
                 o += 1
                 removed = False
             elif tag == "-":
-                if is_code(body):
+                if all_code or is_code(body):
                     anchors.add(o + 1)
                     removed = True
                 o += 1
             else:
                 out.append(body)
-                if is_code(body) and not removed:
+                if (all_code or is_code(body)) and not removed:
                     anchors.add(max(o, 1))  # line before insertion
                     anchors.add(o + 1)  # line after insertion
         pos = o
@@ -153,6 +153,8 @@ class Ctx:
         self.ctx_names = json.loads((MAP / "contexts.json").read_text())
         self.ctx_cache = {}
         self.fixtures = json.loads((MAP / "fixtures.json").read_text())
+        up = MAP / "uses.json"
+        self.uses = json.loads(up.read_text()) if up.exists() else {}
         self.incomplete = set()
         inc = json.loads((MAP / "incomplete.json").read_text())
         for fp in inc["files"]:
@@ -176,18 +178,34 @@ def load_linemap(rel):
     return json.loads(p.read_text())
 
 
+def entry_tests(cx, e):
+    sel = set()
+    if not e:
+        return sel
+    for tid in e["tests"]:
+        sel.update(cx.by_id.get(re.sub(r"\[.*$", "", tid), []))
+    for fp in e["files"]:
+        if fp == "*":
+            raise AllTests()
+        sel.update(cx.by_file.get(fp, []))
+    return sel
+
+
 def select_py_source(cx, rel, f):
     p = SG / rel
     old_src = p.read_text(encoding="utf-8")
     anchors, new_src = anchors_and_new(old_src, f["hunks"])
     compile(new_src, rel, "exec")  # syntax error -> every test importing it fails
-    if not anchors:
-        return set()
-    lm = load_linemap(rel)
-    if lm is None:
-        return set()  # never imported by any test
-    spans = stmt_spans(ast.parse(old_src))
-    sel = set()
+    old_tree = ast.parse(old_src)
+    same = ast.dump(old_tree) == ast.dump(ast.parse(new_src))
+    reads = entry_tests(cx, cx.fixtures.get(rel))  # tests that read this file as text
+    if same:
+        return reads  # comment/whitespace only: only tests that read the source text can notice
+    if not anchors:  # a "comment" inside a string literal, etc: count every changed line
+        anchors, _ = anchors_and_new(old_src, f["hunks"], all_code=True)
+    lm = load_linemap(rel) or {}
+    spans = stmt_spans(old_tree)
+    sel = set(reads)
     union_done = False
     for a in anchors:
         start, in_func = locate(spans, a)
@@ -204,11 +222,10 @@ def select_py_source(cx, rel, f):
             seen = set()
             for ctxs in lm.values():
                 seen.update(ctxs)
-            if -1 in seen and len(seen) == 1:
-                pass
             for c in seen:
                 if c >= 0:
                     sel.update(cx.ctx_tests(c))
+            sel |= entry_tests(cx, cx.uses.get(rel))  # tests that instantiate/import things from this file
             stem = os.path.basename(rel)[:-3]
             for path, nums in cx.by_file.items():
                 if os.path.basename(path) == f"test_{stem}.py":
