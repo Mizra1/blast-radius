@@ -6,6 +6,7 @@ RUN grep -v -i -E '^(mypy|mypy_extensions|ruff|pre_commit|pdoc|pandas-stubs|type
 COPY build/ /build/
 RUN python /build/fetch.py && (python /build/build_map.py || echo "map build failed; selector will run everything" >&2) \
  && chmod -R a+rX /opt /app 2>/dev/null || true
-COPY selector.py /app/selector.py
+COPY selector.py runner.py /app/
+COPY overlay/ /app/overlay/
 RUN chmod -R a+rX /app
 CMD ["python", "/app/selector.py"]
